@@ -1,5 +1,5 @@
 torch==2.2.0 
-onnx==1.6.0 
+onnx==1.17.0 
 transformers==2.4.0 
 onnxruntime==1.2.0 
 numpy==1.18.0 

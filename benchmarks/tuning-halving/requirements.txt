@@ -13,4 +13,4 @@ redis==3.5.3
 grpcio-tools==1.38.1
 environs==9.3.2
 scikit-learn==0.24.2
-numpy==1.20.1
+numpy==2.1.3

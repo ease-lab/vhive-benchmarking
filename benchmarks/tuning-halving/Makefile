@@ -32,26 +32,46 @@ MODE = --load
 
 .PHONY: proto
 
-all: all-image 
+all: all-image all-image-lambda
 
 all-image: driver-image trainer-image
 
+all-image-lambda: driver-image-lambda trainer-image-lambda
+
+all-push: all-image-push all-image-lambda-push
+
 all-image-push: driver-image-push trainer-image-push
 
-driver-image: Dockerfile proto/tuning_pb2_grpc.py proto/tuning_pb2.py driver/main.py
+all-image-lambda-push: driver-image-lambda-push trainer-image-lambda-push
+
+driver-image: docker/Dockerfile proto/tuning_pb2_grpc.py proto/tuning_pb2.py driver/main.py
 	docker buildx build $(PLATFORM) \
 	-t vhiveease/tuning-halving-driver:latest \
 	--build-arg target_arg=driver \
 	--secret id=GOPRIVATE_KEY \
-	-f Dockerfile \
+	-f docker/Dockerfile \
 	$(ROOT) $(MODE)
 
-trainer-image: Dockerfile proto/tuning_pb2_grpc.py proto/tuning_pb2.py trainer/main.py
+trainer-image: docker/Dockerfile proto/tuning_pb2_grpc.py proto/tuning_pb2.py trainer/main.py
 	docker buildx build $(PLATFORM) \
 	-t vhiveease/tuning-halving-trainer:latest \
 	--build-arg target_arg=trainer \
 	--secret id=GOPRIVATE_KEY \
-	-f Dockerfile \
+	-f docker/Dockerfile \
+	$(ROOT) $(MODE)
+
+driver-image-lambda: docker/Dockerfile.Lambda driver/main.py
+	docker buildx build $(PLATFORM) \
+	-t $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/tuning-halving-driver:latest \
+	--build-arg target_arg=driver \
+	-f docker/Dockerfile.Lambda \
+	$(ROOT) $(MODE)
+
+trainer-image-lambda: docker/Dockerfile.Lambda trainer/main.py
+	docker buildx build $(PLATFORM) \
+	-t $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/tuning-halving-trainer:latest \
+	--build-arg target_arg=trainer \
+	-f docker/Dockerfile.Lambda \
 	$(ROOT) $(MODE)
 
 driver-image-push: driver-image
@@ -59,6 +79,20 @@ driver-image-push: driver-image
 
 trainer-image-push: trainer-image
 	docker push vhiveease/tuning-halving-trainer:latest
+
+driver-image-lambda-push: driver-image-lambda
+	aws ecr get-login-password --region $(AWS_REGION) | \
+		docker login --username AWS --password-stdin \
+		$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+	python $(ROOT)/runner/aws_lambda_scripts/aws_actions.py create_ecr_repo -n tuning-halving-driver
+	docker push $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/tuning-halving-driver:latest
+
+trainer-image-lambda-push: trainer-image-lambda
+	aws ecr get-login-password --region $(AWS_REGION) | \
+		docker login --username AWS --password-stdin \
+		$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+	python $(ROOT)/runner/aws_lambda_scripts/aws_actions.py create_ecr_repo -n tuning-halving-trainer
+	docker push $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/tuning-halving-trainer:latest
 
 proto: proto/tuning.proto proto/helloworld.proto
 	python -m grpc_tools.protoc -I./proto --python_out=./proto --grpc_python_out=./proto ./proto/tuning.proto

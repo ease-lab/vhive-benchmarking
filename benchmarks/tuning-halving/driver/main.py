@@ -20,53 +20,49 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from __future__ import print_function
-
-import sys
 import os
+import sys
 
-# adding python tracing sources to the system path
-sys.path.insert(0, os.getcwd() + '/../proto/')
-sys.path.insert(0, os.getcwd() + '/../../../../utils/tracing/python')
-sys.path.insert(0, os.getcwd() + '/../../../../utils/storage/python')
+from driver import Driver
 import tracing
-from storage import Storage
-import helloworld_pb2_grpc
-import helloworld_pb2
-import tuning_pb2_grpc
-import tuning_pb2
-import destination as XDTdst
-import source as XDTsrc
-import utils as XDTutil
 
-import grpc
-from grpc_reflection.v1alpha import reflection
-import argparse
-import boto3
 import logging as log
-import socket
-
-import sklearn.datasets as datasets
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import  cross_val_predict
-from sklearn.metrics import roc_auc_score
-import itertools
-import numpy as np
 import pickle
-from sklearn.model_selection import StratifiedShuffleSplit
 
-from concurrent import futures
+LAMBDA = os.environ.get('IS_LAMBDA', 'no').lower() in ['true', 'yes', '1']
 
-parser = argparse.ArgumentParser()
-parser.add_argument("-dockerCompose", "--dockerCompose", dest="dockerCompose", default=False, help="Env docker compose")
-parser.add_argument("-tAddr", "--tAddr", dest="tAddr", default="trainer.default.127.0.0.1.nip.io:80",
-                    help="trainer address")
-parser.add_argument("-sp", "--sp", dest="sp", default="80", help="serve port")
-parser.add_argument("-zipkin", "--zipkin", dest="zipkinURL",
-                    default="http://zipkin.istio-system.svc.cluster.local:9411/api/v2/spans",
-                    help="Zipkin endpoint url")
+if LAMBDA:
+    import boto3
+    import json
 
-args = parser.parse_args()
+if not LAMBDA:
+    import helloworld_pb2_grpc
+    import helloworld_pb2
+    import tuning_pb2_grpc
+    import tuning_pb2
+    import destination as XDTdst
+    import source as XDTsrc
+    import utils as XDTutil
+
+    import grpc
+    from grpc_reflection.v1alpha import reflection
+    import argparse
+    import socket
+
+    from concurrent import futures
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-dockerCompose", "--dockerCompose",
+        dest="dockerCompose", default=False, help="Env docker compose")
+    parser.add_argument("-tAddr", "--tAddr", dest="tAddr",
+        default="trainer.default.127.0.0.1.nip.io:80",
+        help="trainer address")
+    parser.add_argument("-sp", "--sp", dest="sp", default="80", help="serve port")
+    parser.add_argument("-zipkin", "--zipkin", dest="zipkinURL",
+        default="http://zipkin.istio-system.svc.cluster.local:9411/api/v2/spans",
+        help="Zipkin endpoint url")
+
+    args = parser.parse_args()
 
 if tracing.IsTracingEnabled():
     tracing.initTracer("driver", url=args.zipkinURL)
@@ -76,85 +72,10 @@ if tracing.IsTracingEnabled():
 INLINE = "INLINE"
 S3 = "S3"
 XDT = "XDT"
-storageBackend = None
-
-# set aws credentials:
-AWS_ID = os.getenv('AWS_ACCESS_KEY', "")
-AWS_SECRET = os.getenv('AWS_SECRET_KEY', "")
-# set aws bucket name:
-BUCKET_NAME = os.getenv('BUCKET_NAME','vhive-tuning')
-
-def get_self_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        # doesn't even have to be reachable
-        s.connect(('10.255.255.255', 1))
-        IP = s.getsockname()[0]
-    except Exception:
-        IP = '127.0.0.1'
-    finally:
-        s.close()
-    return IP
-
-def generate_dataset():
-	n_samples = 1000
-	n_features = 1024
-	X, y = datasets.make_classification(n_samples,
-	                                    n_features,
-	                                    n_redundant=0,
-	                                    n_clusters_per_class=2,
-	                                    weights=[0.9, 0.1],
-	                                    flip_y=0.1,
-	                                    random_state=42)
-	return {'features': X, 'labels': y}
-
-def generate_hyperparam_sets(param_config):
-	keys = list(param_config.keys())
-	values = [param_config[k] for k in keys]
-
-	for elements in itertools.product(*values):
-		yield dict(zip(keys, elements))
 
 class GreeterServicer(helloworld_pb2_grpc.GreeterServicer):
-    def __init__(self, transferType, XDTconfig=None):
-
-        self.benchName = BUCKET_NAME
-        self.transferType = transferType
-        if transferType == S3:
-            self.s3_client = boto3.resource(
-                service_name='s3',
-                region_name=os.getenv("AWS_REGION", 'us-west-1'),
-                aws_access_key_id=AWS_ID,
-                aws_secret_access_key=AWS_SECRET
-            )
-        elif transferType == XDT:
-            if XDTconfig is None:
-                log.fatal("Empty XDT config")
-            self.XDTconfig = XDTconfig
-
-    def handler_broker(self, event, context):
-        dataset = generate_dataset()
-        hyperparam_config = {
-            'model': 'RandomForestRegressor',
-            'params': {
-                'n_estimators': [5, 10, 20],
-                'min_samples_split': [2, 4],
-                'random_state': [42]
-            }
-        }
-        models_config = {
-            'models': [
-                {
-                    'model': 'RandomForestRegressor',
-                    'params': hyperparam
-                } for hyperparam in generate_hyperparam_sets(hyperparam_config['params'])
-            ]
-        }
-        key = storageBackend.put('dataset_key', pickle.dumps(dataset))
-        return {
-            'dataset_key': key,
-            'models_config': models_config
-        }
+    def __init__(self, XDTconfig=None):
+        self.driver = Driver(XDTconfig)
 
     def train(self, arg: dict) -> dict:
         log.info("Invoke Trainer")
@@ -179,52 +100,50 @@ class GreeterServicer(helloworld_pb2_grpc.GreeterServicer):
     # Driver code below
     def SayHello(self, request, context):
         log.info("Driver received a request")
+        self.driver.drive({'trainerfn': self.train})
+        return helloworld_pb2.HelloReply(message=self.driver.storageBackend.bucket)
 
-        event = self.handler_broker({}, {})
-        models = event['models_config']['models']
+class AWSLambdaDriver:
+    def __init__(self, XDTconfig=None):
+        self.driver = Driver()
 
-        while len(models)>1:
-            sample_rate = 1/len(models)
-            log.info(f"Running {len(models)} models on the dataset with sample rate {sample_rate} ")
-            # Run different model configs on sampled dataset
-            training_responses = []
-            for count, model_config in enumerate(models):
-                training_responses.append(
-                    self.train({
-                        'dataset_key': event['dataset_key'],
-                        'model_config': model_config,
-                        'count': count,
-                        'sample_rate': sample_rate
-                    })
-                )
+    def train(self, arg: dict) -> dict:
+        log.info("Invoke Trainer")
+        trainerArgs = {
+            'dataset_key': 'dataset_key',
+            'model_config': json.dumps(arg['model_config']),
+            'count': arg['count'],
+            'sample_rate': str(arg['sample_rate'])
+        }
+        resp = boto3.client("lambda").invoke(
+            FunctionName = os.environ.get('TRAINER_FUNCTION'),
+            InvocationType = 'RequestResponse',
+            LogType = 'None',
+            Payload = json.dumps(trainerArgs),
+        )
+        payloadBytes = resp['Payload'].read()
+        payloadJson = json.loads(payloadBytes)
 
-            # Keep models with the best score
-            top_number = len(training_responses)//2
-            sorted_responses = sorted(training_responses, key=lambda result: result['score'], reverse=True)
-            models = [resp['params'] for resp in sorted_responses[:top_number]]
+        return {
+            'model_key': payloadJson['model_key'],
+            'pred_key': payloadJson['pred_key'],
+            'score': float(payloadJson['score']),
+            'params': json.loads(payloadJson['params'])
+        }
 
-        log.info(f"Training final model {models[0]} on the full dataset")
-        final_response = self.train({
-            'dataset_key': event['dataset_key'],
-            'model_config': models[0],
-            'count': 0,
-            'sample_rate': 1.0
-        })
-
-        log.info(f"Final result: score {final_response['score']}, model {final_response['params']['model']} ")
-        return helloworld_pb2.HelloReply(message=self.benchName)
-
+    def SayHello(self, event, context):
+        log.info("Driver received a request")
+        self.driver.drive({'trainerfn': self.train})
+        return self.driver.storageBackend.bucket
 
 def serve():
     transferType = os.getenv('TRANSFER_TYPE', S3)
     if transferType == S3:
-        global storageBackend
-        storageBackend = Storage(BUCKET_NAME)
         log.info("Using inline or s3 transfers")
         max_workers = int(os.getenv("MAX_SERVER_THREADS", 10))
         server = grpc.server(futures.ThreadPoolExecutor(max_workers=max_workers))
         helloworld_pb2_grpc.add_GreeterServicer_to_server(
-            GreeterServicer(transferType=transferType), server)
+            GreeterServicer(), server)
         SERVICE_NAMES = (
             helloworld_pb2.DESCRIPTOR.services_by_name['Greeter'].full_name,
             reflection.SERVICE_NAME,
@@ -239,7 +158,10 @@ def serve():
     else:
         log.fatal("Invalid Transfer type")
 
+def lambda_handler(event, context):
+    awsLambdaDriver = AWSLambdaDriver()
+    return awsLambdaDriver.SayHello(event, context)
 
-if __name__ == '__main__':
+if not LAMBDA and __name__ == '__main__':
     log.basicConfig(level=log.INFO)
     serve()

@@ -32,42 +32,76 @@ MODE = --load
 
 .PHONY: proto
 
-all: all-image 
+all: all-image all-image-lambda
 
 all-image: driver-image trainer-image reducer-image metatrainer-image
 
+all-image-lambda: driver-image-lambda trainer-image-lambda reducer-image-lambda metatrainer-image-lambda
+
+all-push: all-image-push all-image-lambda-push
+
 all-image-push: driver-image-push trainer-image-push reducer-image-push metatrainer-image-push
 
-driver-image: Dockerfile proto/stacking_pb2_grpc.py proto/stacking_pb2.py driver/main.py
+all-image-lambda-push: driver-image-lambda-push trainer-image-lambda-push reducer-image-lambda-push metatrainer-image-lambda-push
+
+driver-image: docker/Dockerfile proto/stacking_pb2_grpc.py proto/stacking_pb2.py driver/main.py
 	docker buildx build $(PLATFORM) \
 	-t vhiveease/stacking-training-driver:latest \
 	--build-arg target_arg=driver \
 	--secret id=GOPRIVATE_KEY \
-	-f Dockerfile \
+	-f docker/Dockerfile \
 	$(ROOT) $(MODE)
 
-trainer-image: Dockerfile proto/stacking_pb2_grpc.py proto/stacking_pb2.py trainer/main.py
+trainer-image: docker/Dockerfile proto/stacking_pb2_grpc.py proto/stacking_pb2.py trainer/main.py
 	docker buildx build $(PLATFORM) \
 	-t vhiveease/stacking-training-trainer:latest \
 	--build-arg target_arg=trainer \
 	--secret id=GOPRIVATE_KEY \
-	-f Dockerfile \
+	-f docker/Dockerfile \
 	$(ROOT) $(MODE)
 
-reducer-image: Dockerfile proto/stacking_pb2_grpc.py proto/stacking_pb2.py reducer/main.py
+reducer-image: docker/Dockerfile proto/stacking_pb2_grpc.py proto/stacking_pb2.py reducer/main.py
 	docker buildx build $(PLATFORM) \
 	-t vhiveease/stacking-training-reducer:latest \
 	--build-arg target_arg=reducer \
 	--secret id=GOPRIVATE_KEY \
-	-f Dockerfile \
+	-f docker/Dockerfile \
 	$(ROOT) $(MODE)
 
-metatrainer-image: Dockerfile proto/stacking_pb2_grpc.py proto/stacking_pb2.py metatrainer/main.py
+metatrainer-image: docker/Dockerfile proto/stacking_pb2_grpc.py proto/stacking_pb2.py metatrainer/main.py
 	docker buildx build $(PLATFORM) \
 	-t vhiveease/stacking-training-metatrainer:latest \
 	--build-arg target_arg=metatrainer \
 	--secret id=GOPRIVATE_KEY \
-	-f Dockerfile \
+	-f docker/Dockerfile \
+	$(ROOT) $(MODE)
+
+driver-image-lambda: docker/Dockerfile.Lambda driver/main.py
+	docker buildx build $(PLATFORM) \
+	-t $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/stacking-training-driver:latest \
+	--build-arg target_arg=driver \
+	-f docker/Dockerfile.Lambda \
+	$(ROOT) $(MODE)
+
+trainer-image-lambda: docker/Dockerfile.Lambda trainer/main.py
+	docker buildx build $(PLATFORM) \
+	-t $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/stacking-training-trainer:latest \
+	--build-arg target_arg=trainer \
+	-f docker/Dockerfile.Lambda \
+	$(ROOT) $(MODE)
+
+reducer-image-lambda: docker/Dockerfile.Lambda reducer/main.py
+	docker buildx build $(PLATFORM) \
+	-t $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/stacking-training-reducer:latest \
+	--build-arg target_arg=reducer \
+	-f docker/Dockerfile.Lambda \
+	$(ROOT) $(MODE)
+
+metatrainer-image-lambda: docker/Dockerfile.Lambda metatrainer/main.py
+	docker buildx build $(PLATFORM) \
+	-t $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/stacking-training-metatrainer:latest \
+	--build-arg target_arg=metatrainer \
+	-f docker/Dockerfile.Lambda \
 	$(ROOT) $(MODE)
 
 driver-image-push: driver-image
@@ -81,6 +115,34 @@ reducer-image-push: reducer-image
 
 metatrainer-image-push: metatrainer-image
 	docker push vhiveease/stacking-training-metatrainer:latest
+
+driver-image-lambda-push: driver-image-lambda
+	aws ecr get-login-password --region $(AWS_REGION) | \
+		docker login --username AWS --password-stdin \
+		$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+	python $(ROOT)/runner/aws_lambda_scripts/aws_actions.py create_ecr_repo -n stacking-training-driver
+	docker push $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/stacking-training-driver:latest
+
+trainer-image-lambda-push: trainer-image-lambda
+	aws ecr get-login-password --region $(AWS_REGION) | \
+		docker login --username AWS --password-stdin \
+		$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+	python $(ROOT)/runner/aws_lambda_scripts/aws_actions.py create_ecr_repo -n stacking-training-trainer
+	docker push $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/stacking-training-trainer:latest
+
+reducer-image-lambda-push: reducer-image-lambda
+	aws ecr get-login-password --region $(AWS_REGION) | \
+		docker login --username AWS --password-stdin \
+		$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+	python $(ROOT)/runner/aws_lambda_scripts/aws_actions.py create_ecr_repo -n stacking-training-reducer
+	docker push $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/stacking-training-reducer:latest
+
+metatrainer-image-lambda-push: metatrainer-image-lambda
+	aws ecr get-login-password --region $(AWS_REGION) | \
+		docker login --username AWS --password-stdin \
+		$(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com
+	python $(ROOT)/runner/aws_lambda_scripts/aws_actions.py create_ecr_repo -n stacking-training-metatrainer
+	docker push $(AWS_ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/stacking-training-metatrainer:latest
 
 proto: proto/stacking.proto proto/helloworld.proto
 	python -m grpc_tools.protoc -I./proto --python_out=./proto --grpc_python_out=./proto ./proto/stacking.proto

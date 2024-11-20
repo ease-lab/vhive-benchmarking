@@ -70,11 +70,23 @@ jobs:
       id: buildx
       uses: docker/setup-buildx-action@v3
 
+    - name: Install AWS CLI
+      uses: unfor19/install-aws-cli-action@master
+      with:
+        version: '2'
+
+    - name: Set up Python Dependencies for AWS Jobs
+      working-directory: runner/aws_lambda_scripts
+      run: |
+        python3 -m pip install --upgrade pip
+        python3 -m pip install wheel ez_setup setuptools
+        python3 -m pip install -r requirements.txt
+
     - name: Build and Push
       working-directory: benchmarks/stacking-training
       env:
         GOPRIVATE_KEY: ${{ secrets.XDT_REPO_ACCESS_KEY }}
-      run: make all-image-push
+      run: make all-push
 
   test-compose:
     name: Test Docker Compose
@@ -149,7 +161,7 @@ jobs:
           sudo chmod +x $KN_INSTALL_PATH
           echo "Installed kn $KN_VERSION"
 
-      - name: Deploy Functions as Kubectl Services
+      - name: Deploy Functions as Knative Services
         env:
           BUCKET_NAME: vhive-stacking
         run: tools/kn_deploy.sh benchmarks/stacking-training/knative_yamls/s3/*
@@ -192,3 +204,30 @@ jobs:
           kubectl delete -f ./service-metatrainer.yaml --namespace default --wait
           kubectl delete -f ./service-reducer.yaml --namespace default --wait
           kubectl delete -f ./service-trainer.yaml --namespace default --wait
+
+
+  test-aws-lambda:
+    name: Test AWS Lambda Deployment
+    needs: build-and-push
+    runs-on: ubuntu-20.04
+    strategy:
+      fail-fast: false
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v3
+        with:
+          lfs: 'true'
+      - name: Set up Python Dependencies for AWS Jobs
+        working-directory: runner/aws_lambda_scripts
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install wheel ez_setup setuptools
+          python3 -m pip install -r requirements.txt
+      - name: Deploy and Test functions from ECR container
+        working-directory: runner/aws_lambda_scripts
+        run: |
+          python aws_actions.py deploy_lambdafn_from_ecr -n stacking-training-driver -f stacking-training-driver -p invoke_function,access_s3 -e '{"IS_LAMBDA":"true","TRAINER_FUNCTION":"stacking-training-trainer","REDUCER_FUNCTION":"stacking-training-reducer","METATRAINER_FUNCTION":"stacking-training-metatrainer","TrainersNum":"4","CONCURRENT_TRAINING":"true","BUCKET_NAME":"vhive-stacking"}'
+          python aws_actions.py deploy_lambdafn_from_ecr -n stacking-training-trainer -f stacking-training-trainer -p access_s3 -e '{"IS_LAMBDA":"true","BUCKET_NAME":"vhive-stacking"}'
+          python aws_actions.py deploy_lambdafn_from_ecr -n stacking-training-reducer -f stacking-training-reducer -p access_s3 -e '{"IS_LAMBDA":"true","BUCKET_NAME":"vhive-stacking"}'
+          python aws_actions.py deploy_lambdafn_from_ecr -n stacking-training-metatrainer -f stacking-training-metatrainer -p access_s3 -e '{"IS_LAMBDA":"true","BUCKET_NAME":"vhive-stacking"}'
+          python aws_actions.py invoke_lambdafn -f stacking-training-driver

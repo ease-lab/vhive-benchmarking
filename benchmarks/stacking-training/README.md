@@ -21,6 +21,11 @@ transfer will not work.
     ```bash               
     export AWS_ACCESS_KEY=ABCDEFGHIJKLMNOPQRST
     export AWS_SECRET_KEY=ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMN
+    export
+    kubectl create secret generic awscreds \
+			--from-literal=awsaccess=${AWS_ACCESS_KEY} \
+			--from-literal=awssecret=${AWS_SECRET_KEY}
+    kubectl create configmap envmap --from-literal=bucket=${BUCKET_NAME}
     ```
 
 2. Deploy the necessary functions using the `kn_deploy` script.

@@ -1,4 +1,4 @@
-torch==2.1.0
+torch==2.2.0
 datasets==2.4.0
 grpcio==1.59.0
 google==3.0.0

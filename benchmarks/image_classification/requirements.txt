@@ -1,0 +1,5 @@
+cmake 
+future pillow onnx opencv-python-headless tensorflow
+Cython 
+pycocotools 
+protobuf==3.20.*

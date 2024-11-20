@@ -1,0 +1,205 @@
+name: Image classification End-to-End Tests
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "benchmarks/image_classification/**"
+      - "utils/**"
+      - "tools/**"
+      - "runner/**"
+
+  pull_request:
+    branches: [main]
+    paths:
+      - "benchmarks/image_classification/**"
+      - "utils/**"
+      - "tools/**"
+      - "runner/**"
+
+env:
+  GOOS: linux
+  GO111MODULE: on
+  PORT: 50051
+  PLATFORMS: linux/amd64,linux/arm64
+
+jobs:
+  build-and-push:
+    name: Build and push all images
+    runs-on: ubuntu-20.04
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          [
+            image_classification-python
+          ]
+
+    steps:
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v3
+        with:
+          lfs: "true"
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version: '1.18'
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_HUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_ACCESS_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Install AWS CLI
+        uses: unfor19/install-aws-cli-action@master
+        with:
+          version: '2'
+
+      - name: Set up Python version
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.9"
+
+      - name: Set up python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install wheel ez_setup setuptools
+          GRPC_PYTHON_BUILD_SYSTEM_ZLIB=true
+          python3 -m pip install -r benchmarks/image_classification/requirements.txt
+
+      - name: Setup go dependencies
+        working-directory: benchmarks/image_classification
+        env:
+          GOPRIVATE_KEY: ${{ secrets.XDT_REPO_ACCESS_KEY }}
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.26
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.1
+
+      - name: Build and push
+        working-directory: benchmarks/image_classification
+        run: make push-${{ matrix.service }}
+
+  test-compose:
+    name: Test Docker Compose
+    needs: build-and-push
+    env:
+      YAML_DIR: benchmarks/image_classification/yamls/docker-compose/
+    runs-on: ubuntu-20.04
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          [
+            image_classification-python
+          ]
+
+    steps:
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v3
+        with:
+          lfs: "true"
+
+      - name: start docker-compose benchmark
+        run: |
+          docker-compose -f ${{ env.YAML_DIR }}/dc-${{ matrix.service }}.yaml pull
+          docker-compose -f ${{ env.YAML_DIR }}/dc-${{ matrix.service }}.yaml up &> log_file &
+          sleep 60s
+          cat log_file
+
+      - name: invoke the chain
+        run: |
+          ./tools/bin/grpcurl -plaintext localhost:50000 helloworld.Greeter.SayHello
+
+      - name: show docker-compose log
+        run: cat log_file
+
+  test-knative:
+    name: Test Knative Deployment
+    needs: build-and-push
+    env:
+      KIND_VERSION: v0.14.0
+      K8S_VERSION: v1.23
+      YAML_DIR: benchmarks/image_classification/yamls/knative/
+
+    runs-on: ubuntu-20.04
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          [
+            image_classification-python,
+          ]
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          lfs: "true"
+      - name: Checkout LFS objects
+        run: git lfs checkout
+
+      - uses: actions/setup-go@v4
+        with:
+          go-version: 1.18
+
+      ## Setup a Knative cluster to test the service
+      - name: Create k8s Kind Cluster
+        run: bash ./runner/scripts/01-kind.sh
+
+      - name: Install Serving
+        run: bash ./runner/scripts/02-serving.sh
+
+      - name: Install Kourier
+        run: bash ./runner/scripts/02-kourier.sh
+
+      - name: Setup domain
+        run: |
+          INGRESS_HOST="127.0.0.1"
+          KNATIVE_DOMAIN=$INGRESS_HOST.sslip.io
+          kubectl patch configmap -n knative-serving config-domain -p "{\"data\": {\"$KNATIVE_DOMAIN\": \"\"}}"
+
+      ## Test the service
+      - name: Deploy knative
+        run: |
+          kubectl apply -f ${{ env.YAML_DIR }}/kn-${{ matrix.service }}.yaml
+
+      - name: Check if service is ready
+        run: |
+          kubectl wait --for=condition=Ready -f ${{ env.YAML_DIR }}/kn-${{ matrix.service }}.yaml --timeout 120s
+          kubectl get service
+          kubectl get -f ${{ env.YAML_DIR }}/kn-${{ matrix.service }}.yaml
+
+      - name: Test invoking once
+        working-directory: tools/test-client
+        run: |
+          set -x
+          go build ./test-client.go
+
+          NODEPORT=80
+          url=$(kubectl get kservice ${{ matrix.service }} | awk '$2 ~ /http/ {sub(/http\:\/\//,""); print $2}')
+
+          ./test-client --addr $url:$NODEPORT --name "Example text for CI"
+
+      - name: Print logs
+        if: ${{ always() }}
+        run: |
+          set -x
+          container_list=$(kubectl get pods -n default -o jsonpath="{.items[*].spec.containers[*].name}")
+          for container_name in $container_list
+          do
+            kubectl logs -n default -c $container_name -l serving.knative.dev/service=${{ matrix.service }}
+          done
+
+      - name: Down
+        if: ${{ always() }}
+        run: |
+          kubectl delete -f ${{ env.YAML_DIR }}/kn-${{ matrix.service }}.yaml --namespace default --wait

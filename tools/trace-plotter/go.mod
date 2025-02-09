@@ -4,7 +4,7 @@ go 1.21
 
 require (
 	github.com/elastic/go-elasticsearch/v7 v7.17.10
-	github.com/go-echarts/go-echarts/v2 v2.4.1
+	github.com/go-echarts/go-echarts/v2 v2.5.0
 	github.com/gonum/stat v0.0.0-20181125101827-41a0da705a5b
 	github.com/sirupsen/logrus v1.9.3
 )
@@ -16,5 +16,5 @@ require (
 	github.com/gonum/internal v0.0.0-20181124074243-f884aa714029 // indirect
 	github.com/gonum/lapack v0.0.0-20181123203213-e4cdc5a0bff9 // indirect
 	github.com/gonum/matrix v0.0.0-20181209220409-c518dec07be9 // indirect
-	golang.org/x/sys v0.22.0 // indirect
+	golang.org/x/sys v0.30.0 // indirect
 )

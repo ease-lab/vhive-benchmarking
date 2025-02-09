@@ -4,7 +4,6 @@ go 1.21
 
 require (
 	github.com/cloudevents/sdk-go/v2 v2.15.2
-	github.com/containerd/containerd v1.7.20
 	github.com/containerd/log v0.1.0
 	github.com/golang/protobuf v1.5.4
 	github.com/sirupsen/logrus v1.9.3
@@ -25,6 +24,7 @@ require (
 	golang.org/x/net v0.27.0 // indirect
 	golang.org/x/sys v0.22.0 // indirect
 	golang.org/x/text v0.16.0 // indirect
+	golang.org/x/time v0.0.0-20220210224613-90d013bbcef8 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240725223205-93522f1f2a9f // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

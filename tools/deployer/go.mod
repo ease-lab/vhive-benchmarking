@@ -9,4 +9,4 @@ require (
 	github.com/vhive-serverless/vSwarm/tools/endpoint v0.0.0-20231002141623-fe250ed33dde
 )
 
-require golang.org/x/sys v0.22.0 // indirect
+require golang.org/x/sys v0.30.0 // indirect

@@ -22,7 +22,6 @@ require (
 )
 
 require (
-	github.com/containerd/containerd v1.7.20 // indirect
 	github.com/containerd/log v0.1.0 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
